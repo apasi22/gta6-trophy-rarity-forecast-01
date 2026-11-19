@@ -45,17 +45,17 @@ MAX_OUT_BYTES = 65536
 # --- tuning constants (chosen by backtest on simulated growth curves) ---
 MIN_SLOPE_SE = 0.20       # floor on a slope's standard error (logit / log-hour)
 MIN_TIER_TAU = 0.15       # floor on the between-trophy slope sd within a tier
-WEIGHT_TAU_HOURS = 36.0   # recency weight half-life scale: a read this old
+WEIGHT_TAU_HOURS = 18.0   # recency weight half-life scale: a read this old
                           # counts exp(-age/36) as much as the latest read.
                           # The rate trajectory accelerates as players
                           # progress, so the recent slope matters most.
-SPREAD_BASE = 0.08        # logit sd even at zero horizon (refresh noise)
-SPREAD_PER_ROOT_DAY = 0.10  # logit sd grows with sqrt(horizon in days)
-SPREAD_RESID_W = 0.30      # weight on a trophy's own fit residual sd
+SPREAD_BASE = 0.05        # logit sd even at zero horizon (refresh noise)
+SPREAD_PER_ROOT_DAY = 0.05  # logit sd grows with sqrt(horizon in days)
+SPREAD_RESID_W = 0.20      # weight on a trophy's own fit residual sd
 SPREAD_MIN = 0.15
 SPREAD_MAX = 1.50
 SPREAD_FEW_READS = 1.30  # widen when a trophy has fewer than 5 reads
-TIER_CAP = {"platinum": 3.0, "gold": 35.0, "silver": 45.0, "bronze": 70.0}
+TIER_CAP = {"platinum": 3.0, "gold": 35.0, "silver": 45.0, "bronze": 80.0}
 MAX_GROWTH = 25.0         # a rate may not grow more than 25x over the horizon
 RATE_LO = 0.01            # scoring clamps rates to [0.01, 99.99] before logit
 RATE_HI = 99.99
@@ -186,7 +186,7 @@ def forecast_trophy(fit, tier, last_rate, x_target, horizon_days):
     med = clamp(med, RATE_LO, RATE_HI)
     # Caps: never below the last rate's floor for a saturated trophy, never
     # above the tier cap, never more than MAX_GROWTH above the last rate.
-    hi = max(last_rate, cap)
+    hi = cap if last_rate <= cap else 100.0
     if med > hi:
         med = hi
     if med > last_rate and last_rate > 0.0:
