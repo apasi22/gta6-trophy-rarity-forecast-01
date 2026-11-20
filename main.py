@@ -218,6 +218,23 @@ def quantiles_from(median_pct, spread):
     return qs
 
 
+def _history_is_flat(history):
+    """True when every read shows identical rates and player count.
+
+    A perfectly flat history means Exophase has not refreshed since the
+    game launched, so a refresh is likely inside the horizon and will
+    dilute every rate toward the new players' (lower) rates.
+    """
+    if len(history) < 2:
+        return False
+    rates0 = history[0]["rates"]
+    players0 = history[0]["players_tracked"]
+    for read in history[1:]:
+        if read["rates"] != rates0 or read["players_tracked"] != players0:
+            return False
+    return True
+
+
 def forecast_case(case):
     """Forecast every trophy of one case. Returns the output dict."""
     trophies = case["trophies"]
@@ -283,6 +300,20 @@ def forecast_case(case):
                              x_target, horizon_days)
         rows.append({"id": tr["id"], "q": qs})
     rows.sort(key=lambda r: r["id"])
+    if _history_is_flat(history):
+        # Refresh anticipation: on a flat history, expect an Exophase
+        # refresh inside the horizon. Shift every median down and widen
+        # the spread to reflect refresh uncertainty; the 100% trophy is
+        # unaffected by dilution and keeps its forecast.
+        last = history[-1]["rates"]
+        shifted = []
+        for row, rate in zip(rows, last):
+            if rate is not None and rate >= 99.99:
+                shifted.append(row)
+                continue
+            med = clamp(row["q"][2] * 0.30, RATE_LO, RATE_HI)
+            shifted.append({"id": row["id"], "q": quantiles_from(med, 0.80)})
+        rows = shifted
     return {"trophies": rows}
 
 
