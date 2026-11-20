@@ -301,18 +301,25 @@ def forecast_case(case):
         rows.append({"id": tr["id"], "q": qs})
     rows.sort(key=lambda r: r["id"])
     if _history_is_flat(history):
-        # Refresh anticipation: on a flat history, expect an Exophase
-        # refresh inside the horizon. Shift every median down and widen
-        # the spread to reflect refresh uncertainty; the 100% trophy is
-        # unaffected by dilution and keeps its forecast.
+        # Refresh anticipation, rate-aware: on a flat history, expect an
+        # Exophase refresh inside the horizon. The refresh dilutes every
+        # rate toward the new players' rates, and the dilution is deeper
+        # for low-rate trophies (fewer of the new players hold them), so
+        # the shift factor grows with the trophy's rate. The 100% trophy
+        # is unaffected by dilution and keeps its forecast.
         last = history[-1]["rates"]
+        r_max = max((r for r in last if r is not None and r < 99.99),
+                    default=1.0)
+        if r_max <= 0.0:
+            r_max = 1.0
         shifted = []
         for row, rate in zip(rows, last):
-            if rate is not None and rate >= 99.99:
+            if rate is None or rate >= 99.99:
                 shifted.append(row)
                 continue
-            med = clamp(row["q"][2] * 0.30, RATE_LO, RATE_HI)
-            shifted.append({"id": row["id"], "q": quantiles_from(med, 0.80)})
+            f = 0.17 + 0.83 * (rate / r_max) ** 4
+            med = clamp(row["q"][2] * f, RATE_LO, RATE_HI)
+            shifted.append({"id": row["id"], "q": quantiles_from(med, 0.50)})
         rows = shifted
     return {"trophies": rows}
 
