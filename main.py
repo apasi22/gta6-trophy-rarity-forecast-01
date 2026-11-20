@@ -57,6 +57,9 @@ SPREAD_MAX = 1.50
 SPREAD_FEW_READS = 1.30  # widen when a trophy has fewer than 5 reads
 TIER_CAP = {"platinum": 3.0, "gold": 35.0, "silver": 45.0, "bronze": 80.0}
 MAX_GROWTH = 25.0         # a rate may not grow more than 25x over the horizon
+TIER_SHIFT = {"bronze": -0.05, "silver": -0.025, "gold": -0.015,
+              "platinum": 0.0}  # logit shift of the core median, non-flat
+                          # histories only; the 100% trophy is exempt
 RATE_LO = 0.01            # scoring clamps rates to [0.01, 99.99] before logit
 RATE_HI = 99.99
 
@@ -301,12 +304,15 @@ def forecast_case(case):
         rows.append({"id": tr["id"], "q": qs})
     rows.sort(key=lambda r: r["id"])
     if _history_is_flat(history):
-        # Refresh anticipation, rate-aware: on a flat history, expect an
-        # Exophase refresh inside the horizon. The refresh dilutes every
-        # rate toward the new players' rates, and the dilution is deeper
-        # for low-rate trophies (fewer of the new players hold them), so
-        # the shift factor grows with the trophy's rate. The 100% trophy
-        # is unaffected by dilution and keeps its forecast.
+        # Refresh anticipation, exact pooled cohort factor: on a flat
+        # history, expect an Exophase refresh inside the horizon. The
+        # refresh dilutes every rate toward the new players' rates; the
+        # pooled factor is alpha + (1-alpha)*(r/r_max)^p with alpha =
+        # N_old/(N_old+N_new) = 638/3868 = 0.165 (kit-stated counts).
+        # The base is the trophy's LAST RATE: on a flat history the core
+        # median equals it exactly, and the last rate keeps this branch
+        # immune to the per-tier shift below. The 100% trophy is
+        # unaffected by dilution and keeps its forecast.
         last = history[-1]["rates"]
         r_max = max((r for r in last if r is not None and r < 99.99),
                     default=1.0)
@@ -317,9 +323,30 @@ def forecast_case(case):
             if rate is None or rate >= 99.99:
                 shifted.append(row)
                 continue
-            f = 0.17 + 0.83 * (rate / r_max) ** 4
-            med = clamp(row["q"][2] * f, RATE_LO, RATE_HI)
-            shifted.append({"id": row["id"], "q": quantiles_from(med, 0.50)})
+            f = 0.165 + 0.835 * (rate / r_max) ** 4.5
+            med = clamp(rate * f, RATE_LO, RATE_HI)
+            shifted.append({"id": row["id"], "q": quantiles_from(med, 0.40)})
+        rows = shifted
+    else:
+        # Per-tier median shift: the linear log-time extrapolation misses
+        # the early dip (casual players flooding in), so it over-forecasts
+        # slow trophies most. Shift each row's median down by its tier's
+        # measured bias in logit space, recomputing the quantiles with
+        # the row's spread (recovered from its outer quantiles) unchanged.
+        # The 100% trophy is exempt.
+        shifted = []
+        for pos, (row, tr) in enumerate(zip(rows, trophies)):
+            d = TIER_SHIFT.get(tr["tier"], 0.0)
+            last_rate = last_rates.get(pos)
+            if d == 0.0 or (last_rate is not None and last_rate >= 99.99):
+                shifted.append(row)
+                continue
+            qs = row["q"]
+            centre = logit(clamp(qs[2], RATE_LO, RATE_HI) / 100.0)
+            sp = (logit(clamp(qs[4], RATE_LO, RATE_HI) / 100.0)
+                  - logit(clamp(qs[0], RATE_LO, RATE_HI) / 100.0)) / (2 * Z[4])
+            med = clamp(inv_logit(centre + d) * 100.0, RATE_LO, RATE_HI)
+            shifted.append({"id": row["id"], "q": quantiles_from(med, sp)})
         rows = shifted
     return {"trophies": rows}
 
