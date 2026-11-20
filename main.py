@@ -60,6 +60,14 @@ MAX_GROWTH = 25.0         # a rate may not grow more than 25x over the horizon
 TIER_SHIFT = {"bronze": -0.05, "silver": -0.025, "gold": -0.015,
               "platinum": 0.0}  # logit shift of the core median, non-flat
                           # histories only; the 100% trophy is exempt
+BAND_SHIFT = {0: 0.085, 1: 0.028, 2: -0.130}  # logit shift by last-rate
+                          # band (round 6): last rate <1% -> +0.085,
+                          # 1-5% -> +0.028, >=5% -> -0.130. Non-flat
+                          # histories only; the 100% trophy is exempt.
+                          # Audit-fit; the linear log-time fit is too steep
+                          # for fast trophies and too shallow for slow
+                          # ones, so the median error depends on the last
+                          # rate (S-shaped truth vs straight-line fit).
 RATE_LO = 0.01            # scoring clamps rates to [0.01, 99.99] before logit
 RATE_HI = 99.99
 
@@ -221,6 +229,16 @@ def quantiles_from(median_pct, spread):
     return qs
 
 
+def _rate_band(last_rate):
+    """Band index of a trophy's last rate (percent): <1% -> 0, 1-5% -> 1,
+    >=5% -> 2. None counts as the slowest band."""
+    if last_rate is None or last_rate < 1.0:
+        return 0
+    if last_rate < 5.0:
+        return 1
+    return 2
+
+
 def _history_is_flat(history):
     """True when every read shows identical rates and player count.
 
@@ -348,6 +366,25 @@ def forecast_case(case):
             med = clamp(inv_logit(centre + d) * 100.0, RATE_LO, RATE_HI)
             shifted.append({"id": row["id"], "q": quantiles_from(med, sp)})
         rows = shifted
+        # Rate-band median shift (round 6): applied post-hoc on the
+        # per-tier-shifted rows, exactly as the investigation measured it
+        # (same band edges, same audit-fit shifts, same spread recovery
+        # from the row's outer quantiles). The 100% trophy is exempt.
+        # Flat histories never reach this branch.
+        banded = []
+        for pos, (row, tr) in enumerate(zip(rows, trophies)):
+            last_rate = last_rates.get(pos)
+            d = BAND_SHIFT.get(_rate_band(last_rate), 0.0)
+            if d == 0.0 or (last_rate is not None and last_rate >= 99.99):
+                banded.append(row)
+                continue
+            qs = row["q"]
+            centre = logit(clamp(qs[2], RATE_LO, RATE_HI) / 100.0)
+            sp = (logit(clamp(qs[4], RATE_LO, RATE_HI) / 100.0)
+                  - logit(clamp(qs[0], RATE_LO, RATE_HI) / 100.0)) / (2 * Z[4])
+            med = clamp(inv_logit(centre + d) * 100.0, RATE_LO, RATE_HI)
+            banded.append({"id": row["id"], "q": quantiles_from(med, sp)})
+        rows = banded
     return {"trophies": rows}
 
 
